@@ -16,9 +16,29 @@ llm = ChatGoogleGenerativeAI(
 
 def generate_with_langchain(prompt: str) -> str:
     """
-    Send a prompt to Gemini through LangChain.
+    Send a prompt to Gemini through LangChain
+    and return only the plain text answer.
     """
 
     response = llm.invoke(prompt)
 
-    return response.content
+    content = response.content
+
+    # Gemini may return structured content blocks.
+    if isinstance(content, list):
+        text_parts = []
+
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+
+                if text:
+                    text_parts.append(text)
+
+            elif isinstance(item, str):
+                text_parts.append(item)
+
+        return "".join(text_parts).strip()
+
+    # Normal string response
+    return str(content).strip()
