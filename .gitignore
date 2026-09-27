@@ -1,0 +1,26 @@
+# Environment variables and secrets
+.env
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary uploaded files
+temp_*.pdf
+temp_*.txt
+
+# IDE files
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test/cache files
+.pytest_cache/
+.coverage
+htmlcov/
