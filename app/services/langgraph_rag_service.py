@@ -1,4 +1,4 @@
-from typing import TypedDict
+﻿from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
@@ -16,18 +16,13 @@ class RAGState(TypedDict):
 
 
 def retrieve(state: RAGState):
-    """
-    Retrieve relevant chunks belonging only
-    to the current user.
-    """
-
     db = state["db"]
 
     results = search_similar_chunks(
         db,
         state["question"],
         user_id=state["user_id"],
-        limit=3
+        limit=5
     )
 
     context_parts = []
@@ -42,41 +37,83 @@ def retrieve(state: RAGState):
         })
 
     return {
-        "context": "\n\n---\n\n".join(context_parts),
+        "context": "\n\n--- DOCUMENT PASSAGE ---\n\n".join(context_parts),
         "sources": sources
     }
 
 
 def generate(state: RAGState):
-    """
-    Generate an answer using only the retrieved context.
-    """
-
     prompt = f"""
-You are a knowledge assistant.
+You are an AI Knowledge Assistant.
 
-Answer the question using ONLY the provided context.
+Answer the user's COMPLETE question using ONLY the
+information in the document passages below.
 
-If the answer is not present in the context,
-say that you could not find the answer in the provided documents.
-
-Context:
-{state["context"]}
-
-Question:
+USER QUESTION:
 {state["question"]}
 
-Answer:
+DOCUMENT PASSAGES:
+{state["context"]}
+
+IMPORTANT:
+
+- Answer every part of the user's question.
+- If the user asks about two concepts, explain BOTH concepts.
+- If the user asks for a difference, explain BOTH concepts
+  and then clearly explain their difference.
+- Use information from multiple passages when necessary.
+- Do not answer only one part of the question.
+- Do not invent information.
+- Do not mention RAG, retrieval, chunks, vector search,
+  or internal system processes.
+- Do not start with "Based on the provided documents".
+- Use simple and clear language.
+- Preserve important technical terminology.
+
+For a comparison question, use this structure:
+
+Concept 1:
+Explain the first concept.
+
+Concept 2:
+Explain the second concept.
+
+Difference:
+Explain the difference between them.
+
+If there is not enough information in the document passages,
+say:
+
+"I could not find enough information in the provided documents."
+
+Now write the complete answer.
+
+USER QUESTION:
+{state["question"]}
+
+DOCUMENT PASSAGES:
+{state["context"]}
 """
 
     answer = generate_with_langchain(prompt)
+
+    print("\n========== RAG DEBUG ==========")
+    print("QUESTION:")
+    print(state["question"])
+
+    print("\nCONTEXT SENT TO GEMINI:")
+    print(state["context"])
+
+    print("\nANSWER FROM GEMINI:")
+    print(answer)
+
+    print("========== END DEBUG ==========")
 
     return {
         "answer": answer
     }
 
 
-# Create LangGraph workflow
 builder = StateGraph(RAGState)
 
 builder.add_node("retrieve", retrieve)
@@ -87,3 +124,4 @@ builder.add_edge("retrieve", "generate")
 builder.add_edge("generate", END)
 
 rag_graph = builder.compile()
+

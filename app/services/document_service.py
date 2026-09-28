@@ -58,7 +58,6 @@ def clean_line(line: str) -> str:
 
     line = line.strip()
 
-    # Remove repeated whitespace
     line = re.sub(
         r"\s+",
         " ",
@@ -70,16 +69,15 @@ def clean_line(line: str) -> str:
 
 def is_bad_section_candidate(line: str) -> bool:
     """
-    Reject text that should not be treated as a section heading.
+    Reject text that should not be treated
+    as a section heading.
     """
 
     if not line:
         return True
 
-    lower_line = line.lower()
-
-    # Very short extraction artifacts
-    if line in {
+    # PDF/model extraction artifacts
+    if line.lower() in {
         "<eos>",
         "<bos>",
         "<pad>",
@@ -89,7 +87,7 @@ def is_bad_section_candidate(line: str) -> bool:
     }:
         return True
 
-    # Common figure/table labels
+    # Figure/table labels
     if re.match(
         r"^(figure|fig\.|table)\s*\d+",
         line,
@@ -105,7 +103,7 @@ def is_bad_section_candidate(line: str) -> bool:
     if len(line) > 120:
         return True
 
-    # Too many words usually means paragraph/table text
+    # Too many words usually means paragraph text
     if len(line.split()) > 15:
         return True
 
@@ -138,6 +136,16 @@ def detect_section(text: str) -> str | None:
 
     lines = text.splitlines()
 
+    special_headings = {
+        "abstract",
+        "introduction",
+        "conclusion",
+        "references",
+        "bibliography",
+        "acknowledgements",
+        "appendix"
+    }
+
     for raw_line in lines:
 
         line = clean_line(raw_line)
@@ -147,12 +155,6 @@ def detect_section(text: str) -> str | None:
 
         # ----------------------------------------------------
         # Numbered academic headings
-        #
-        # Examples:
-        # 1 Introduction
-        # 3 Model Architecture
-        # 3.2 Attention
-        # 3.2.1 Scaled Dot-Product Attention
         # ----------------------------------------------------
 
         numbered_heading = re.match(
@@ -164,7 +166,6 @@ def detect_section(text: str) -> str | None:
 
             title = numbered_heading.group(2).strip()
 
-            # Heading should not look like a sentence
             if (
                 len(title.split()) <= 15
                 and not title.endswith(".")
@@ -173,29 +174,74 @@ def detect_section(text: str) -> str | None:
 
         # ----------------------------------------------------
         # Special academic headings
-        #
-        # Examples:
-        # Abstract
-        # Introduction
-        # Conclusion
-        # References
-        # Acknowledgements
         # ----------------------------------------------------
-
-        special_headings = {
-            "abstract",
-            "introduction",
-            "conclusion",
-            "references",
-            "bibliography",
-            "acknowledgements",
-            "appendix"
-        }
 
         if line.lower() in special_headings:
             return line
 
     return None
+
+
+# ============================================================
+# CAPTION DETECTION
+# ============================================================
+
+def looks_like_figure_caption(text: str) -> bool:
+    """
+    Determine whether the ENTIRE chunk looks like
+    a figure caption.
+
+    Important:
+    A technical paragraph that merely mentions
+    "Figure 2" should NOT become a figure_caption.
+    """
+
+    clean_text = clean_line(text)
+
+    if not clean_text:
+        return False
+
+    # A real caption should normally be relatively short.
+    words = clean_text.split()
+
+    if len(words) > 60:
+        return False
+
+    # Caption normally starts with Figure/Fig.
+    if re.match(
+        r"^(figure|fig\.)\s*\d+",
+        clean_text,
+        re.IGNORECASE
+    ):
+        return True
+
+    return False
+
+
+def looks_like_table_caption(text: str) -> bool:
+    """
+    Determine whether the ENTIRE chunk looks like
+    a table caption.
+    """
+
+    clean_text = clean_line(text)
+
+    if not clean_text:
+        return False
+
+    words = clean_text.split()
+
+    if len(words) > 60:
+        return False
+
+    if re.match(
+        r"^table\s*\d+",
+        clean_text,
+        re.IGNORECASE
+    ):
+        return True
+
+    return False
 
 
 # ============================================================
@@ -243,22 +289,14 @@ def detect_chunk_type(text: str) -> str:
     # FIGURE CAPTION
     # --------------------------------------------------------
 
-    if re.search(
-        r"\b(figure|fig\.)\s*\d+",
-        clean_text,
-        re.IGNORECASE
-    ):
+    if looks_like_figure_caption(clean_text):
         return "figure_caption"
 
     # --------------------------------------------------------
     # TABLE CAPTION
     # --------------------------------------------------------
 
-    if re.search(
-        r"\btable\s*\d+",
-        clean_text,
-        re.IGNORECASE
-    ):
+    if looks_like_table_caption(clean_text):
         return "table_caption"
 
     # --------------------------------------------------------
@@ -284,7 +322,8 @@ def split_text(
     chunk_size: int = 500
 ) -> list[str]:
     """
-    Split text into approximately equal word-based chunks.
+    Split text into approximately equal
+    word-based chunks.
     """
 
     words = text.split()
@@ -296,7 +335,6 @@ def split_text(
         len(words),
         chunk_size
     ):
-
         chunk = " ".join(
             words[i:i + chunk_size]
         )
@@ -350,14 +388,7 @@ def ingest_pdf(
 
     total_chunks = 0
 
-    # This remembers the latest valid section.
-    #
-    # Example:
-    #
-    # Page 3 -> "3 Model Architecture"
-    # Page 4 -> inherits "3 Model Architecture"
-    # Page 5 -> "3.2 Attention"
-    #
+    # Remember the latest valid section.
     current_section = None
 
     # ========================================================
@@ -371,7 +402,7 @@ def ingest_pdf(
         page_text = page["text"]
 
         # ----------------------------------------------------
-        # Try to detect a new section on this page
+        # Detect a new section on this page
         # ----------------------------------------------------
 
         detected_section = detect_section(
@@ -379,7 +410,6 @@ def ingest_pdf(
         )
 
         if detected_section:
-
             current_section = detected_section
 
         # ----------------------------------------------------
@@ -397,19 +427,16 @@ def ingest_pdf(
 
         for chunk_text in chunks:
 
+            # ------------------------------------------------
             # Detect content type
+            # ------------------------------------------------
+
             chunk_type = detect_chunk_type(
                 chunk_text
             )
 
             # ------------------------------------------------
             # Section handling
-            # ------------------------------------------------
-            #
-            # If the chunk itself is a valid heading,
-            # use it as the section.
-            #
-            # Otherwise inherit the latest section.
             # ------------------------------------------------
 
             chunk_section = (
@@ -431,17 +458,11 @@ def ingest_pdf(
 
             chunk = DocumentChunk(
                 document_id=document.id,
-
                 content=chunk_text,
-
                 embedding=embedding,
-
                 page_number=page_number,
-
                 section=chunk_section,
-
                 chunk_type=chunk_type,
-
                 source=filename
             )
 

@@ -5,7 +5,7 @@ import json
 
 from app.database import get_db
 from app.schemas.chat import ChatRequest
-from app.models import Conversation, Message, Document
+from app.models import Conversation, Message, Document, DocumentChunk
 from app.services.auth_service import get_current_user
 from app.services.langgraph_rag_service import rag_graph
 
@@ -16,19 +16,11 @@ router = APIRouter(
 )
 
 
-# ============================================================
-# RUN LANGGRAPH RAG
-# ============================================================
-
 def run_rag(
     db: Session,
     question: str,
     user_id: int
 ):
-    """
-    Run the existing LangGraph RAG pipeline.
-    """
-
     result = rag_graph.invoke(
         {
             "question": question,
@@ -43,9 +35,67 @@ def run_rag(
     return result
 
 
-# ============================================================
-# NORMAL CHAT
-# ============================================================
+def get_detailed_sources(
+    db: Session,
+    sources: list
+):
+    detailed_sources = []
+
+    for source in sources:
+
+        chunk_id = source.get("chunk_id")
+        document_id = source.get("document_id")
+
+        document = (
+            db.query(Document)
+            .filter(
+                Document.id == document_id
+            )
+            .first()
+        )
+
+        chunk = (
+            db.query(DocumentChunk)
+            .filter(
+                DocumentChunk.id == chunk_id
+            )
+            .first()
+        )
+
+        detailed_sources.append(
+            {
+                "chunk_id": chunk_id,
+                "document_id": document_id,
+                "filename": (
+                    document.filename
+                    if document
+                    else None
+                ),
+                "page_number": (
+                    chunk.page_number
+                    if chunk
+                    else None
+                ),
+                "section": (
+                    chunk.section
+                    if chunk
+                    else None
+                ),
+                "chunk_type": (
+                    chunk.chunk_type
+                    if chunk
+                    else None
+                ),
+                "source": (
+                    chunk.source
+                    if chunk
+                    else None
+                )
+            }
+        )
+
+    return detailed_sources
+
 
 @router.post("")
 def chat(
@@ -53,15 +103,7 @@ def chat(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    """
-    Normal non-streaming chat endpoint.
-    """
-
     user_id = current_user
-
-    # --------------------------------------------------------
-    # Find existing conversation
-    # --------------------------------------------------------
 
     conversation = None
 
@@ -82,10 +124,6 @@ def chat(
                 detail="Conversation not found"
             )
 
-    # --------------------------------------------------------
-    # Create new conversation
-    # --------------------------------------------------------
-
     else:
 
         conversation = Conversation(
@@ -96,10 +134,6 @@ def chat(
         db.commit()
         db.refresh(conversation)
 
-    # --------------------------------------------------------
-    # Save user message
-    # --------------------------------------------------------
-
     user_message = Message(
         conversation_id=conversation.id,
         role="user",
@@ -108,10 +142,6 @@ def chat(
 
     db.add(user_message)
     db.commit()
-
-    # --------------------------------------------------------
-    # Run LangGraph RAG
-    # --------------------------------------------------------
 
     result = run_rag(
         db=db,
@@ -129,83 +159,10 @@ def chat(
         []
     )
 
-    # --------------------------------------------------------
-    # Build detailed sources
-    # --------------------------------------------------------
-
-    detailed_sources = []
-
-    for source in sources:
-
-        chunk_id = source.get(
-            "chunk_id"
-        )
-
-        document_id = source.get(
-            "document_id"
-        )
-
-        # Find document
-        document = (
-            db.query(Document)
-            .filter(
-                Document.id == document_id
-            )
-            .first()
-        )
-
-        # Find chunk
-        from app.models import DocumentChunk
-
-        chunk = (
-            db.query(DocumentChunk)
-            .filter(
-                DocumentChunk.id == chunk_id
-            )
-            .first()
-        )
-
-        detailed_sources.append(
-            {
-                "chunk_id": chunk_id,
-
-                "document_id": document_id,
-
-                "filename": (
-                    document.filename
-                    if document
-                    else None
-                ),
-
-                "page_number": (
-                    chunk.page_number
-                    if chunk
-                    else None
-                ),
-
-                "section": (
-                    chunk.section
-                    if chunk
-                    else None
-                ),
-
-                "chunk_type": (
-                    chunk.chunk_type
-                    if chunk
-                    else None
-                ),
-
-                "source": (
-                    chunk.source
-                    if chunk
-                    else None
-                )
-            }
-        )
-
-    # --------------------------------------------------------
-    # Save assistant message
-    # --------------------------------------------------------
+    detailed_sources = get_detailed_sources(
+        db,
+        sources
+    )
 
     assistant_message = Message(
         conversation_id=conversation.id,
@@ -223,29 +180,13 @@ def chat(
     }
 
 
-# ============================================================
-# STREAMING CHAT
-# ============================================================
-
 @router.post("/stream")
 def chat_stream(
     request: ChatRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    """
-    SSE chat endpoint.
-
-    The RAG generation itself is completed first,
-    then the answer and source information are
-    sent through SSE.
-    """
-
     user_id = current_user
-
-    # --------------------------------------------------------
-    # Find existing conversation
-    # --------------------------------------------------------
 
     conversation = None
 
@@ -266,10 +207,6 @@ def chat_stream(
                 detail="Conversation not found"
             )
 
-    # --------------------------------------------------------
-    # Create conversation
-    # --------------------------------------------------------
-
     else:
 
         conversation = Conversation(
@@ -280,10 +217,6 @@ def chat_stream(
         db.commit()
         db.refresh(conversation)
 
-    # --------------------------------------------------------
-    # Save user message
-    # --------------------------------------------------------
-
     user_message = Message(
         conversation_id=conversation.id,
         role="user",
@@ -292,10 +225,6 @@ def chat_stream(
 
     db.add(user_message)
     db.commit()
-
-    # --------------------------------------------------------
-    # Run existing LangGraph RAG
-    # --------------------------------------------------------
 
     result = run_rag(
         db=db,
@@ -313,81 +242,10 @@ def chat_stream(
         []
     )
 
-    # --------------------------------------------------------
-    # Build detailed sources
-    # --------------------------------------------------------
-
-    detailed_sources = []
-
-    from app.models import DocumentChunk
-
-    for source in sources:
-
-        chunk_id = source.get(
-            "chunk_id"
-        )
-
-        document_id = source.get(
-            "document_id"
-        )
-
-        document = (
-            db.query(Document)
-            .filter(
-                Document.id == document_id
-            )
-            .first()
-        )
-
-        chunk = (
-            db.query(DocumentChunk)
-            .filter(
-                DocumentChunk.id == chunk_id
-            )
-            .first()
-        )
-
-        detailed_sources.append(
-            {
-                "chunk_id": chunk_id,
-
-                "document_id": document_id,
-
-                "filename": (
-                    document.filename
-                    if document
-                    else None
-                ),
-
-                "page_number": (
-                    chunk.page_number
-                    if chunk
-                    else None
-                ),
-
-                "section": (
-                    chunk.section
-                    if chunk
-                    else None
-                ),
-
-                "chunk_type": (
-                    chunk.chunk_type
-                    if chunk
-                    else None
-                ),
-
-                "source": (
-                    chunk.source
-                    if chunk
-                    else None
-                )
-            }
-        )
-
-    # --------------------------------------------------------
-    # Save assistant message
-    # --------------------------------------------------------
+    detailed_sources = get_detailed_sources(
+        db,
+        sources
+    )
 
     assistant_message = Message(
         conversation_id=conversation.id,
@@ -398,52 +256,42 @@ def chat_stream(
     db.add(assistant_message)
     db.commit()
 
-    # ========================================================
-    # SSE EVENT STREAM
-    # ========================================================
+    conversation_id = conversation.id
 
     def event_stream():
 
-        # ----------------------------------------------------
-        # START
-        # ----------------------------------------------------
-
+        # Start event
         yield (
             "event: start\n"
             "data: Generating answer...\n\n"
         )
 
-        # ----------------------------------------------------
-        # ANSWER
-        # ----------------------------------------------------
+        # Answer event
+        #
+        # SSE requires every line of a multi-line
+        # message to start with "data:".
+        answer_lines = answer.splitlines()
 
-        yield (
-            "event: answer\n"
-            f"data: {answer}\n\n"
-        )
+        yield "event: answer\n"
 
-        # ----------------------------------------------------
-        # SOURCES
-        # ----------------------------------------------------
+        for line in answer_lines:
+            yield f"data: {line}\n"
 
+        yield "\n"
+
+        # Sources event
         yield (
             "event: sources\n"
             f"data: {json.dumps(detailed_sources)}\n\n"
         )
 
-        # ----------------------------------------------------
-        # CONVERSATION
-        # ----------------------------------------------------
-
+        # Conversation event
         yield (
             "event: conversation\n"
-            f"data: {conversation.id}\n\n"
+            f"data: {conversation_id}\n\n"
         )
 
-        # ----------------------------------------------------
-        # DONE
-        # ----------------------------------------------------
-
+        # Complete event
         yield (
             "event: done\n"
             "data: complete\n\n"
